@@ -1,0 +1,73 @@
+name: CMake Windows Build
+
+on:
+  push:
+    branches: [ "main", "master", "release" ]
+  pull_request:
+    branches: [ "main", "master", "release" ]
+  # 新增：允许在 GitHub Actions 网页端手动触发，并自己填入版本号
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '发布 Release 的版本号 (例如 v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+env:
+  BUILD_TYPE: Release
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write # 发布 Release 需要写入权限
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install MSYS2 and binutils
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: mingw-w64-x86_64-binutils
+
+      - name: Add MSYS2 mingw64 bin to PATH
+        shell: pwsh
+        run: |
+          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      # 替代以前繁琐的脚本，完美解决 MSVC 环境报错
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # 换用 Ninja 构建，速度直接起飞
+      - name: Configure CMake
+        shell: pwsh
+        run: cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+
+      - name: Build solution
+        shell: pwsh
+        run: cmake --build build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: solstice-dll
+          path: build/**/*.dll
+
+      # 仅在手动点击运行 (workflow_dispatch) 的时候才发布 Release
+      - name: Publish GitHub Release
+        if: github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: Release ${{ github.event.inputs.version }}
+          files: build/**/*.dll
+          generate_release_notes: true
